@@ -13,7 +13,7 @@ import sys # <--- ADICIONADO: Importar sys para sys.exit()
 
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_USERNAME = "google" # ✏️ MANTENHA O TOKEN INVÁLIDO AQUI PARA TESTAR O ERRO
-GITHUB_TOKEN = "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" # ✏️ MANTENHA INVÁLIDO PARA TESTE
+GITHUB_TOKEN = "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" # ✏️ MANTENHA INVÁLIDO PARA TESTE
 
 DB_NAME = "github_repos.db" # Nome do arquivo do banco de dados SQLite
 PER_PAGE = 100 # Itens por página na API
