@@ -2,7 +2,7 @@
 
 import streamlit as st
 import pandas as pd
-import sqlite3
+import requests # Importar para fazer requisições HTTP para sua própria API
 import plotly.express as px
 import os
 import numpy as np
@@ -11,98 +11,79 @@ import numpy as np
 # 🎯 PASSO 1: CONFIGURAÇÕES GLOBAIS DO DASHBOARD [EDITÁVEL]
 # ============================================================================
 
-st.set_page_config(layout="wide", page_title="Análise de Repositórios GitHub (Avançado)")
+st.set_page_config(layout="wide", page_title="Dashboard GitHub (Via API Local)")
 
-# 📂 Nome do arquivo do banco de dados SQLite
-DB_NAME = "github_repos.db"
+# 🌐 URL base da SUA API Flask local
+FLASK_API_BASE_URL = "http://127.0.0.1:5000" # ✏️ Verifique se este é o endereço da sua API Flask
 
 # ============================================================================
-# ⚙️ PASSO 2: FUNÇÃO PARA OBTER DADOS DO BANCO DE DADOS
+# ⚙️ PASSO 2: FUNÇÃO PARA OBTER DADOS DA SUA PRÓPRIA API
 # ============================================================================
 
-@st.cache_data(ttl=600) # Armazena em cache os resultados da função por 10 minutos
-def get_repos_from_db(username_filter=None):
+@st.cache_data(ttl=120) # Cacheia os resultados da API por 2 minutos
+def get_repos_from_api(username_filter=None):
     """
-    Busca repositórios do banco de dados SQLite.
+    Busca repositórios da SUA PRÓPRIA API Flask.
     Se username_filter for fornecido, filtra por proprietário.
     """
-    if not os.path.exists(DB_NAME):
-        st.error(f"❌ ERRO: Banco de dados '{DB_NAME}' não encontrado.")
-        st.info("Por favor, execute 'python github_to_db.py' primeiro para criar e popular o banco de dados.")
-        return pd.DataFrame()
-
-    conn = None
+    api_url = f"{FLASK_API_BASE_URL}/repositorios"
+    params = {}
+    
+    if username_filter:
+        if isinstance(username_filter, list) and len(username_filter) > 0:
+            for owner in username_filter:
+                if 'proprietario' not in params:
+                    params['proprietario'] = []
+                params['proprietario'].append(owner)
+        else: # Single username filter
+            params['proprietario'] = username_filter
+    
     try:
-        conn = sqlite3.connect(DB_NAME)
-        query = "SELECT * FROM repos"
-        params = []
+        st.info(f"Conectando à sua API em {api_url} com filtros: {params}")
+        response = requests.get(api_url, params=params)
+        response.raise_for_status() # Lança exceção para erros HTTP
         
-        if username_filter:
-            if isinstance(username_filter, list) and len(username_filter) > 0:
-                placeholders = ', '.join(['?' for _ in username_filter])
-                query += f" WHERE proprietario IN ({placeholders})"
-                params.extend(username_filter)
-            else: # Single username filter
-                query += " WHERE proprietario = ?"
-                params.append(username_filter)
+        repos_data = response.json()
         
-        df = pd.read_sql_query(query, conn, params=params)
-        
-        df.rename(columns={
-            'id': 'ID_DB',
-            'nome': 'Nome',
-            'proprietario': 'Proprietario',
-            'descricao': 'Descricao',
-            'estrelas': 'Estrelas',
-            'forks': 'Forks',
-            'ultima_atualizacao': 'Ultima_Atualizacao',
-            'linguagem_principal': 'Linguagem_Principal',
-            'url': 'URL',
-            'data_coleta': 'Data_Coleta'
-        }, inplace=True)
-        
-        st.success(f"✅ Dados carregados do banco de dados '{DB_NAME}'. Total de {len(df)} repositórios.")
-        return df
+        st.success(f"✅ Dados carregados da sua API. Total de {len(repos_data)} repositórios.")
+        return repos_data
 
-    except sqlite3.Error as e:
-        st.error(f"❌ ERRO ao carregar dados do banco de dados: {e}")
-        return pd.DataFrame()
-    finally:
-        if conn:
-            conn.close()
+    except requests.exceptions.ConnectionError as e:
+        st.error(f"❌ ERRO: Não foi possível conectar à sua API Flask em {FLASK_API_BASE_URL}.")
+        st.warning("  -> Certifique-se de que seu servidor Flask (github_api_server.py) está rodando em um terminal separado.")
+        return []
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ ERRO ao carregar dados da sua API: {e}")
+        return []
 
 # ============================================================================
 # 📊 PASSO 3: FUNÇÃO PARA ANALISAR E EXIBIR NO DASHBOARD
 # ============================================================================
 
-def analyze_and_display_dashboard(df_original, username): # Renomeado para df_original
-    st.header(f"Análise de Repositórios GitHub de {username}")
+def analyze_and_display_dashboard(df_original, username_display):
+    st.header(f"Análise de Repositórios GitHub de {username_display}")
 
     # --- Widgets de Filtragem ---
     st.sidebar.header("Opções de Filtragem")
 
-    # Slider para filtrar por Estrelas mínimas
     min_stars = int(df_original['Estrelas'].min()) if not df_original['Estrelas'].empty else 0
     max_stars = int(df_original['Estrelas'].max()) if not df_original['Estrelas'].empty else 0
     selected_min_stars = st.sidebar.slider(
         "Estrelas Mínimas:",
         min_value=min_stars,
         max_value=max_stars,
-        value=min_stars # Valor inicial
+        value=min_stars
     )
 
-    # Seleção múltipla para Linguagem Principal
     all_languages = df_original['Linguagem_Principal'].fillna('Desconhecida').unique().tolist()
     selected_languages = st.sidebar.multiselect(
         "Filtrar por Linguagem Principal:",
         options=all_languages,
-        default=all_languages # Seleciona todas por padrão
+        default=all_languages
     )
 
-    # Campo de busca por nome ou descrição do repositório
     search_query = st.sidebar.text_input("Buscar por Nome/Descrição:").lower()
 
-    # Aplicar filtros
     df_filtered = df_original[df_original['Estrelas'] >= selected_min_stars]
     df_filtered = df_filtered[df_filtered['Linguagem_Principal'].fillna('Desconhecida').isin(selected_languages)]
     
@@ -114,7 +95,7 @@ def analyze_and_display_dashboard(df_original, username): # Renomeado para df_or
 
     if df_filtered.empty:
         st.warning("Nenhum repositório encontrado com os filtros selecionados.")
-        return # Sai da função se não houver dados para exibir após filtragem
+        return
 
 
     # --- Métricas Chave ---
@@ -171,46 +152,75 @@ def analyze_and_display_dashboard(df_original, username): # Renomeado para df_or
     st.dataframe(df_filtered[display_cols].set_index('Nome'), use_container_width=True)
 
 # ============================================================================
-# 🚀 PASSO 4: EXECUÇÃO PRINCIPAL DO DASHBOARD (LENDO DO DB E COM FILTROS)
+# 🚀 PASSO 4: EXECUÇÃO PRINCIPAL DO DASHBOARD (LENDO DA API LOCAL)
 # ============================================================================
 
 if __name__ == "__main__":
-    st.title("Analisador de Repositórios Públicos do GitHub (Fonte: Banco de Dados)")
+    st.title("Analisador de Repositórios Públicos do GitHub (Fonte: Sua API Local)")
 
-    # Obter todos os proprietários únicos do DB para o filtro
-    all_owners_df = get_repos_from_db()
-    if not all_owners_df.empty:
-        unique_owners = ['Todos'] + sorted(all_owners_df['Proprietario'].unique().tolist())
+    # Obter todos os proprietários únicos da SUA API Flask (chamando /proprietarios)
+    unique_owners_list_from_api = []
+    try:
+        owners_api_url = f"{FLASK_API_BASE_URL}/proprietarios"
+        st.info(f"Conectando à sua API para listar proprietários: {owners_api_url}")
+        owners_response = requests.get(owners_api_url)
+        owners_response.raise_for_status() # Lança exceção para erros HTTP
+        unique_owners_list_from_api = owners_response.json()
         
-        selected_owner = st.selectbox(
-            "Selecione um Proprietário (Usuário GitHub) para analisar:",
-            options=unique_owners,
-            index=unique_owners.index('google') if 'google' in unique_owners else 0
-        )
-    else:
-        selected_owner = None
-        st.warning("Nenhum dado encontrado no banco de dados para filtrar proprietários.")
-        st.info("Certifique-se de ter executado 'python github_to_db.py' para popular o banco de dados.")
+    except requests.exceptions.ConnectionError:
+        st.error(f"❌ ERRO: Não foi possível conectar à sua API Flask em {FLASK_API_BASE_URL} para listar proprietários.")
+        st.warning("  -> Certifique-se de que seu servidor Flask (github_api_server.py) está rodando em um terminal separado.")
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ ERRO ao carregar proprietários da sua API: {e}")
+        
+    unique_owners = ['Todos']
+    if unique_owners_list_from_api:
+        unique_owners.extend(sorted(unique_owners_list_from_api))
+        
+    selected_owner_display = st.selectbox(
+        "Selecione um Proprietário (Usuário GitHub) para analisar:",
+        options=unique_owners,
+        index=unique_owners.index('google') if 'google' in unique_owners else 0
+    )
 
     df_repos = pd.DataFrame() 
+    repos_from_api_raw = []
 
-    if selected_owner and selected_owner != 'Todos':
-        df_repos = get_repos_from_db(username_filter=selected_owner)
-    elif selected_owner == 'Todos':
-        df_repos = get_repos_from_db()
+    if selected_owner_display and selected_owner_display != 'Todos':
+        repos_from_api_raw = get_repos_from_api(username_filter=selected_owner_display)
+    elif selected_owner_display == 'Todos':
+        repos_from_api_raw = get_repos_from_api()
     else:
-        st.info("Aguardando seleção de proprietário ou dados no banco de dados.")
+        st.info("Aguardando seleção de proprietário ou dados da sua API.")
 
-    if not df_repos.empty:
-        # Converter colunas para tipos numéricos/datetime
-        df_repos['Estrelas'] = pd.to_numeric(df_repos['Estrelas'], errors='coerce').fillna(0).astype(float)
-        df_repos['Forks'] = pd.to_numeric(df_repos['Forks'], errors='coerce').fillna(0).astype(float)
-        df_repos['Ultima_Atualizacao'] = pd.to_datetime(df_repos['Ultima_Atualizacao'], errors='coerce')
+    if repos_from_api_raw:
+        df_repos = pd.DataFrame(repos_from_api_raw)
         
-        display_username = selected_owner if selected_owner != 'Todos' else "Todos os Repositórios Coletados"
+        # As colunas já vêm da API renomeadas do DB (estrelas, forks, etc.)
+        # Mas para o Streamlit Display, precisamos dos nomes "Nome", "Estrelas", etc.
+        # e a conversão para float
         
-        analyze_and_display_dashboard(df_repos, display_username)
-    elif selected_owner and selected_owner != 'Todos':
-        st.info(f"Nenhum repositório encontrado para o proprietário '{selected_owner}' no banco de dados.")
+        # Converter colunas numéricas e de data
+        df_repos['estrelas'] = pd.to_numeric(df_repos['estrelas'], errors='coerce').fillna(0).astype(float)
+        df_repos['forks'] = pd.to_numeric(df_repos['forks'], errors='coerce').fillna(0).astype(float)
+        df_repos['ultima_atualizacao'] = pd.to_datetime(df_repos['ultima_atualizacao'], errors='coerce')
+        
+        # Renomear para nomes de exibição no dashboard
+        df_repos.rename(columns={
+            'nome_repositorio': 'Nome',
+            'proprietario_github': 'Proprietario',
+            'estrelas': 'Estrelas',
+            'forks': 'Forks',
+            'ultima_atualizacao': 'Ultima_Atualizacao',
+            'linguagem_principal': 'Linguagem_Principal',
+            'url_html': 'URL',
+            'descricao': 'Descricao',
+            'data_coleta_api': 'Data_Coleta'
+        }, inplace=True)
+
+
+        analyze_and_display_dashboard(df_repos, selected_owner_display) # Passa o df_repos e o proprietario selecionado para exibicao
+    elif selected_owner_display and selected_owner_display != 'Todos':
+        st.info(f"Nenhum repositório encontrado para o proprietário '{selected_owner_display}' na sua API.")
     else:
-        st.info("Carregue o banco de dados primeiro executando 'python github_to_db.py'.")
+        st.info("Certifique-se de que seu servidor Flask (github_api_server.py) está rodando e contém dados.")
